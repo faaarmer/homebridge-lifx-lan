@@ -34,13 +34,14 @@ var Client = new LifxClient();
 var Characteristic, ColorTemperature, Kelvin, PlatformAccessory, Service, UUIDGen;
 
 var fadeDuration;
-
+var my;
 const UUID_KELVIN = 'C4E24248-04AC-44AF-ACFF-40164E829DBA';
 const UUID_COLOR_TEMPERATURE = '000000CE-0000-1000-8000-0026BB765291';
+const homebridgeLib = require('homebridge-lib')
 
 module.exports = function(homebridge) {
+    my = new homebridgeLib.MyHomeKitTypes(homebridge)
     PlatformAccessory = homebridge.platformAccessory;
-
     Characteristic = homebridge.hap.Characteristic;
     Service = homebridge.hap.Service;
     UUIDGen = homebridge.hap.uuid;
@@ -131,7 +132,6 @@ function LifxLanPlatform(log, config, api) {
         }
         else {
             if (accessory instanceof LifxAccessory) {
-                this.log("Online: %s [%s]", accessory.accessory.context.name, bulb.id);
                 accessory.updateReachability(bulb);
             }
         }
@@ -152,13 +152,12 @@ function LifxLanPlatform(log, config, api) {
             this.addAccessory(bulb);
         }
         else {
-            bulb.getState(function(err, state) {
+             bulb.getState(function(err, state) {
                 if (err) {
                     state = {
                         label: bulb.client.label
                     }
                 }
-
                 this.log("Online: %s [%s]", accessory.context.name, bulb.id);
                 this.accessories[uuid] = new LifxAccessory(this.log, accessory, bulb, state);
             }.bind(this));
@@ -629,13 +628,16 @@ function LifxAccessory(log, accessory, bulb, data) {
         service.addCharacteristic(ColorTemperature);
     }
 
+     service.addOptionalCharacteristic(my.Characteristics.BrightnessChange)
+    this.log("brightnessChange added for %s - %s", this.accessory.context.name, service.testCharacteristic(my.Characteristics.BrightnessChange))
+
     this.accessory.on('identify', function(paired, callback) {
         this.log("%s - identify", this.accessory.context.name);
         this.setWaveform(null, callback);
     }.bind(this));
 
-    this.addEventHandlers();
-    this.updateReachability(bulb);
+     this.addEventHandlers();
+     this.updateReachability(bulb);
 }
 
 LifxAccessory.prototype.addEventHandler = function(service, characteristic) {
@@ -665,6 +667,12 @@ LifxAccessory.prototype.addEventHandler = function(service, characteristic) {
                 .setValue(this.color.brightness)
                 .setProps({minValue: 1})
                 .on('set', this.setBrightness.bind(this));
+            break;
+        case my.Characteristics.BrightnessChange:
+            service
+                .getCharacteristic(my.Characteristics.BrightnessChange)
+                .updateValue(0)
+                  .on('set', this.setBrightnessChange.bind(this));
             break;
         case ColorTemperature:
             service
@@ -700,6 +708,7 @@ LifxAccessory.prototype.addEventHandlers = function() {
 
     this.addEventHandler(Service.Lightbulb, Characteristic.Hue);
     this.addEventHandler(Service.Lightbulb, Characteristic.Saturation);
+    this.addEventHandler(Service.Lightbulb, my.Characteristics.BrightnessChange);
 }
 
 LifxAccessory.prototype.closeCallbacks = function(err, value) {
@@ -789,12 +798,32 @@ LifxAccessory.prototype.getState = function(type, callback) {
 }
 
 LifxAccessory.prototype.setBrightness = function(value, callback) {
-    if (value == this.accessory.getService(Service.Lightbulb).getCharacteristic(Characteristic.Brightness).value) {
+       if (value == this.accessory.getService(Service.Lightbulb).getCharacteristic(Characteristic.Brightness).value) {
         callback(null);
         return;
     }
 
     this.setColor("brightness", value, callback);
+}
+
+LifxAccessory.prototype.setBrightnessChange = function(delta, callback) {
+    if (delta == 0) {
+       return callback()
+    }
+    const currentValue = this.color.brightness
+    var newValue = currentValue+delta
+    if (newValue < 0) {
+        newValue = 0
+    } else if (newValue > 100 ){
+        newValue = 100;
+    }
+
+    this.log("%s - change brightness by %s%%", this.accessory.context.name, delta)
+
+    this.setColor("brightness", newValue, callback);
+    setTimeout(() => {
+      this.accessory.getService(Service.Lightbulb).setCharacteristic(my.Characteristics.BrightnessChange, 0)
+    }, 500)
 }
 
 LifxAccessory.prototype.setColor = function(type, value, callback){
